@@ -1,0 +1,20 @@
+# Optional dedicated access-point settings.
+HEART_AP_SSID="Surrogate Heart"
+# Uncomment and use 8-63 characters to enable WPA security.
+# HEART_AP_PASSWORD="replace-with-a-private-password"
+
+# Optional upstream/home Wi-Fi bootstrap values. These do not replace or
+# disable the Surrogate Heart AP. Settings entered in the controller remain
+# session-only until Save Defaults is pressed.
+# HEART_UPSTREAM_WIFI_ENABLED=true
+# HEART_UPSTREAM_WIFI_SSID="your-home-network"
+# HEART_UPSTREAM_WIFI_PASSWORD="your-home-password"
+
+# Existing CircuitPython auto-connect settings are also recognized as a
+# bootstrap fallback. They connect before code.py starts.
+# CIRCUITPY_WIFI_SSID="your-home-network"
+# CIRCUITPY_WIFI_PASSWORD="your-home-password"
+
+# Development only. Registers an intentionally faulting motor-lease endpoint.
+# Never enable this in normal operation.
+# HEART_SAFETY_DEBUG=false

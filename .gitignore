@@ -1,0 +1,19 @@
+# Private device configuration
+settings.toml
+secrets.py
+
+# CircuitPython and Python generated files
+boot_out.txt
+__pycache__/
+*.pyc
+
+# Operating-system metadata
+.DS_Store
+.fseventsd/
+.Trashes/
+System Volume Information/
+
+# Editor files
+.vscode/
+.idea/
+*~

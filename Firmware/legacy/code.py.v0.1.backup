@@ -1,0 +1,667 @@
+import os
+import time
+import board
+import wifi
+import socketpool
+import adafruit_drv2605
+
+from adafruit_httpserver import Server, Request, Response, GET, POST
+
+# -------------------------------------------------
+# HEART SETTINGS
+# -------------------------------------------------
+
+bpm = 72
+intensity = 70
+heartbeat_enabled = True
+effect_mode = "heart"
+heart_level = 0
+snore_duration = 1.4
+snore_taper = 0.7
+snore_gap = 3.6
+breathing_level = 1
+
+# -------------------------------------------------
+# DRV2605
+# --------------------------------------------------
+
+i2c = board.STEMMA_I2C()
+drv = adafruit_drv2605.DRV2605(i2c)
+drv.use_ERM()
+
+# Real-time mode lets us control motor strength directly.
+drv.mode = adafruit_drv2605.MODE_REALTIME
+drv.realtime_value = 0
+
+# -------------------------------------------------
+# WIFI
+# -------------------------------------------------
+
+print("Connecting to Wi-Fi...")
+
+wifi.radio.connect(
+    os.getenv("CIRCUITPY_WIFI_SSID"),
+    os.getenv("CIRCUITPY_WIFI_PASSWORD")
+)
+
+ip = wifi.radio.ipv4_address
+
+print("Connected!")
+print("Open this address on your phone:")
+print("http://{}".format(ip))
+
+pool = socketpool.SocketPool(wifi.radio)
+server = Server(pool, "/")
+
+# -------------------------------------------------
+# WEB PAGE
+# -------------------------------------------------
+
+HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1">
+
+    <title>Surrogate Heart</title>
+
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            margin: 0;
+            padding: 24px;
+            background: #111;
+            color: white;
+            text-align: center;
+        }
+
+        .card {
+            max-width: 420px;
+            margin: auto;
+            background: #222;
+            padding: 24px;
+            border-radius: 20px;
+        }
+
+        h1 {
+            margin-top: 0;
+        }
+
+        .bpm {
+            font-size: 56px;
+            margin: 15px;
+        }
+
+        input[type=range] {
+            width: 100%;
+        }
+
+        button {
+            font-size: 18px;
+            padding: 14px 20px;
+            margin: 6px;
+            border-radius: 12px;
+            border: 0;
+        }
+
+        .label {
+            margin-top: 25px;
+            font-size: 18px;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="card">
+
+    <h1><span id="modeIcon">&#10084;&#65039;</span> <span id="modeName">Heart</span></h1>
+
+    <div>
+        <button id="heartMode">Heart</button>
+        <button id="snoringMode">Snoring</button>
+    </div>
+
+    <div id="heartControls">
+    <div class="bpm">
+        <span id="bpmValue">72</span>
+        <small>BPM</small>
+    </div>
+
+    <div class="label">Heartbeat Rate</div>
+
+    <input
+        id="bpm"
+        type="range"
+        min="30"
+        max="300"
+        value="72"
+    >
+
+    <div>
+        <button id="minus">&minus;</button>
+        <button id="plus">+</button>
+    </div>
+
+    <div class="label">Heart Mode: <span id="heartPresetValue">Off / Manual</span></div>
+    <input id="heartPreset" type="range" min="0" max="5" step="1" value="0">
+    </div>
+
+    <div id="snoreControls" class="hidden">
+        <div class="label">Snore Duration: <span id="durationValue">1.4</span> seconds</div>
+        <input id="duration" type="range" min="0.2" max="5" step="0.05" value="1.4">
+
+        <div class="label">Taper Time: <span id="taperValue">0.7</span> seconds</div>
+        <input id="taper" type="range" min="0" max="3" step="0.05" value="0.7">
+
+        <div class="label">Time Between Snores: <span id="gapValue">3.6</span> seconds</div>
+        <input id="gap" type="range" min="0" max="10" step="0.05" value="3.6">
+
+        <div class="label">Breathing Speed: <span id="breathingValue">Sleeping</span></div>
+        <input id="breathing" type="range" min="0" max="5" step="1" value="1">
+    </div>
+
+    <div class="label">
+        Intensity:
+        <span id="intensityValue">70</span>%
+    </div>
+
+    <input
+        id="intensity"
+        type="range"
+        min="0"
+        max="100"
+        value="70"
+    >
+
+    <br><br>
+
+    <button id="toggle">Stop Heart</button>
+
+    <button id="test">Test Vibration</button>
+
+</div>
+
+<script>
+
+const bpm = document.getElementById("bpm");
+const heartPreset = document.getElementById("heartPreset");
+const intensity = document.getElementById("intensity");
+const duration = document.getElementById("duration");
+const taper = document.getElementById("taper");
+const gap = document.getElementById("gap");
+const breathing = document.getElementById("breathing");
+
+const bpmValue = document.getElementById("bpmValue");
+const heartPresetValue = document.getElementById("heartPresetValue");
+const intensityValue =
+    document.getElementById("intensityValue");
+const durationValue = document.getElementById("durationValue");
+const taperValue = document.getElementById("taperValue");
+const gapValue = document.getElementById("gapValue");
+const breathingValue = document.getElementById("breathingValue");
+const breathingNames = [
+    "Off / Manual", "Sleeping", "Walking", "Running", "Jackrabbit", "Hummingbird"
+];
+const heartRates = [72, 50, 90, 140, 200, 300];
+const breathingPresets = [
+    null,
+    {duration: 1.4, taper: 0.7, gap: 3.6},
+    {duration: 1.1, taper: 0.5, gap: 1.4},
+    {duration: 0.7, taper: 0.3, gap: 0.6},
+    {duration: 0.45, taper: 0.2, gap: 0.35},
+    {duration: 0.25, taper: 0.1, gap: 0.25}
+];
+
+let effectMode = "heart";
+let effectEnabled = true;
+
+function updateToggleLabel() {
+    const effectName = effectMode === "heart" ? "Heart" : "Snoring";
+    document.getElementById("toggle").textContent =
+        (effectEnabled ? "Stop " : "Start ") + effectName;
+}
+
+function sendSettings() {
+
+    fetch(
+        "/settings?bpm=" +
+        bpm.value +
+        "&heart=" + heartPreset.value +
+        "&intensity=" +
+        intensity.value +
+        "&mode=" +
+        effectMode +
+        "&duration=" + duration.value +
+        "&taper=" + taper.value +
+        "&gap=" + gap.value +
+        "&breathing=" + breathing.value,
+        {method:"POST"}
+    );
+}
+
+function setMode(mode) {
+    effectMode = mode;
+    document.getElementById("modeName").textContent =
+        mode === "heart" ? "Heart" : "Snoring";
+    document.getElementById("modeIcon").innerHTML =
+        mode === "heart" ? "&#10084;&#65039;" : "&#128564;";
+    document.getElementById("heartControls").classList.toggle(
+        "hidden", mode !== "heart"
+    );
+    document.getElementById("snoreControls").classList.toggle(
+        "hidden", mode !== "snoring"
+    );
+    updateToggleLabel();
+    sendSettings();
+}
+
+document.getElementById("heartMode")
+.addEventListener("click", () => setMode("heart"));
+
+document.getElementById("snoringMode")
+.addEventListener("click", () => setMode("snoring"));
+
+bpm.addEventListener("change", () => {
+    heartPreset.value = 0;
+    heartPresetValue.textContent = breathingNames[0];
+    bpmValue.textContent = bpm.value;
+    sendSettings();
+});
+
+bpm.addEventListener("input", () => {
+    bpmValue.textContent = bpm.value;
+});
+
+heartPreset.addEventListener("input", () => {
+    heartPresetValue.textContent = breathingNames[Number(heartPreset.value)];
+});
+
+heartPreset.addEventListener("change", () => {
+    const level = Number(heartPreset.value);
+
+    if (level > 0) {
+        bpm.value = heartRates[level];
+        bpmValue.textContent = bpm.value;
+    }
+
+    sendSettings();
+});
+
+intensity.addEventListener("change", () => {
+    intensityValue.textContent = intensity.value;
+    sendSettings();
+});
+
+intensity.addEventListener("input", () => {
+    intensityValue.textContent = intensity.value;
+});
+
+duration.addEventListener("input", () => {
+    durationValue.textContent = duration.value;
+});
+function selectManualMode() {
+    breathing.value = 0;
+    breathingValue.textContent = breathingNames[0];
+    sendSettings();
+}
+
+duration.addEventListener("change", selectManualMode);
+
+taper.addEventListener("input", () => {
+    taperValue.textContent = taper.value;
+});
+taper.addEventListener("change", selectManualMode);
+
+gap.addEventListener("input", () => {
+    gapValue.textContent = gap.value;
+});
+gap.addEventListener("change", selectManualMode);
+
+breathing.addEventListener("input", () => {
+    breathingValue.textContent = breathingNames[Number(breathing.value)];
+});
+breathing.addEventListener("change", () => {
+    const preset = breathingPresets[Number(breathing.value)];
+
+    if (preset) {
+        duration.value = preset.duration;
+        taper.value = preset.taper;
+        gap.value = preset.gap;
+        durationValue.textContent = duration.value;
+        taperValue.textContent = taper.value;
+        gapValue.textContent = gap.value;
+    }
+
+    sendSettings();
+});
+
+document.getElementById("plus")
+.addEventListener("click", () => {
+
+    heartPreset.value = 0;
+    heartPresetValue.textContent = breathingNames[0];
+
+    bpm.value =
+        Math.min(300, Number(bpm.value) + 1);
+
+    bpmValue.textContent = bpm.value;
+    sendSettings();
+});
+
+document.getElementById("minus")
+.addEventListener("click", () => {
+
+    heartPreset.value = 0;
+    heartPresetValue.textContent = breathingNames[0];
+
+    bpm.value =
+        Math.max(30, Number(bpm.value) - 1);
+
+    bpmValue.textContent = bpm.value;
+    sendSettings();
+});
+
+document.getElementById("toggle")
+.addEventListener("click", async (event) => {
+
+    const r = await fetch(
+        "/toggle",
+        {method:"POST"}
+    );
+
+    const state = await r.text();
+
+    effectEnabled = state === "on";
+    updateToggleLabel();
+});
+
+document.getElementById("test")
+.addEventListener("click", () => {
+
+    fetch(
+        "/test",
+        {method:"POST"}
+    );
+});
+
+</script>
+
+</body>
+</html>
+"""
+
+# -------------------------------------------------
+# HTTP ROUTES
+# -------------------------------------------------
+
+@server.route("/", GET)
+def home(request: Request):
+    return Response(
+        request,
+        HTML,
+        content_type="text/html"
+    )
+
+
+@server.route("/settings", POST)
+def settings(request: Request):
+
+    global bpm, intensity, effect_mode, heart_level
+    global snore_duration, snore_taper, snore_gap, breathing_level
+
+    try:
+
+        new_bpm = request.query_params.get("bpm")
+        new_heart = request.query_params.get("heart")
+        new_intensity = request.query_params.get(
+            "intensity"
+        )
+        new_mode = request.query_params.get("mode")
+        new_duration = request.query_params.get("duration")
+        new_taper = request.query_params.get("taper")
+        new_gap = request.query_params.get("gap")
+        new_breathing = request.query_params.get("breathing")
+
+        if new_bpm:
+            bpm = max(
+                30,
+                min(300, int(new_bpm))
+            )
+
+        if new_heart:
+            heart_level = max(0, min(5, int(new_heart)))
+
+        if heart_level > 0:
+            heart_rates = (50, 90, 140, 200, 300)
+            bpm = heart_rates[heart_level - 1]
+
+        if new_intensity:
+            intensity = max(
+                0,
+                min(100, int(new_intensity))
+            )
+
+        if new_mode in ("heart", "snoring"):
+            effect_mode = new_mode
+
+        if new_duration:
+            snore_duration = max(0.2, min(5.0, float(new_duration)))
+
+        if new_taper:
+            snore_taper = max(0.0, min(3.0, float(new_taper)))
+
+        if new_gap:
+            snore_gap = max(0.0, min(10.0, float(new_gap)))
+
+        if new_breathing:
+            breathing_level = max(0, min(5, int(new_breathing)))
+
+        if breathing_level > 0:
+            preset_values = (
+                (1.4, 0.7, 3.6),
+                (1.1, 0.5, 1.4),
+                (0.7, 0.3, 0.6),
+                (0.45, 0.2, 0.35),
+                (0.25, 0.1, 0.25),
+            )
+            snore_duration, snore_taper, snore_gap = preset_values[
+                breathing_level - 1
+            ]
+
+        print(
+            "BPM:",
+            bpm,
+            "Heart preset:",
+            heart_level,
+            "Intensity:",
+            intensity,
+            "Mode:",
+            effect_mode,
+            "Snore:",
+            snore_duration,
+            "Taper:",
+            snore_taper,
+            "Gap:",
+            snore_gap,
+            "Breathing:",
+            breathing_level
+        )
+
+    except Exception as e:
+        print("Settings error:", e)
+
+    return Response(
+        request,
+        "ok"
+    )
+
+
+@server.route("/toggle", POST)
+def toggle(request: Request):
+
+    global heartbeat_enabled
+
+    heartbeat_enabled = not heartbeat_enabled
+
+    if not heartbeat_enabled:
+        drv.realtime_value = 0
+
+    return Response(
+        request,
+        "on" if heartbeat_enabled else "off"
+    )
+
+
+@server.route("/test", POST)
+def test(request: Request):
+
+    strength = int(
+        127 * intensity / 100
+    )
+
+    drv.realtime_value = strength
+
+    time.sleep(0.15)
+
+    drv.realtime_value = 0
+
+    return Response(
+        request,
+        "ok"
+    )
+
+
+# -------------------------------------------------
+# START SERVER
+# -------------------------------------------------
+
+server.start(str(ip))
+
+print("Web server running.")
+
+# -------------------------------------------------
+# HEARTBEAT ENGINE
+# -------------------------------------------------
+
+next_beat = time.monotonic()
+
+heartbeat_phase = 0
+phase_time = 0
+breathing_rates = (0, 12, 24, 45, 75, 120)
+snore_started = time.monotonic()
+snore_update = 0
+
+while True:
+
+    # Handle web requests
+    server.poll()
+
+    now = time.monotonic()
+
+    if not heartbeat_enabled:
+        drv.realtime_value = 0
+        continue
+
+    strength = int(
+        127 * intensity / 100
+    )
+
+    interval = 60.0 / bpm
+
+    if effect_mode == "snoring":
+        breathing_rate = breathing_rates[breathing_level]
+
+        if breathing_rate == 0:
+            snore_interval = snore_duration + snore_gap
+        else:
+            snore_interval = 60.0 / breathing_rate
+
+        if now - snore_started >= snore_interval:
+            snore_started = now
+
+        elapsed = now - snore_started
+        active_duration = min(snore_duration, snore_interval * 0.9)
+
+        if now >= snore_update:
+            if elapsed < active_duration:
+                rise_time = min(0.25, active_duration * 0.25)
+                envelope = min(1.0, elapsed / rise_time)
+                taper_time = min(snore_taper, active_duration)
+
+                if taper_time > 0 and elapsed > active_duration - taper_time:
+                    envelope *= (active_duration - elapsed) / taper_time
+
+                rumble = 1.0 if int(elapsed * 18) % 2 == 0 else 0.72
+                drv.realtime_value = int(strength * envelope * rumble)
+            else:
+                drv.realtime_value = 0
+
+            snore_update = now + 0.04
+
+        heartbeat_phase = 0
+        next_beat = now + interval
+        continue
+
+    snore_started = now
+
+    # Start heartbeat
+    if heartbeat_phase == 0 and now >= next_beat:
+
+        drv.realtime_value = strength
+
+        if bpm >= 180:
+            phase_time = now + min(0.040, interval * 0.18)
+            heartbeat_phase = 4
+        else:
+            # LUB
+            phase_time = now + 0.070
+            heartbeat_phase = 1
+
+    # End LUB
+    elif heartbeat_phase == 1 and now >= phase_time:
+
+        drv.realtime_value = 0
+
+        phase_time = now + 0.100
+
+        heartbeat_phase = 2
+
+    # Start DUB
+    elif heartbeat_phase == 2 and now >= phase_time:
+
+        drv.realtime_value = strength
+
+        phase_time = now + 0.090
+
+        heartbeat_phase = 3
+
+    # End DUB
+    elif heartbeat_phase == 3 and now >= phase_time:
+
+        drv.realtime_value = 0
+
+        next_beat += interval
+
+        # Recover gracefully if something delayed us.
+        if next_beat < now:
+            next_beat = now + interval
+
+        heartbeat_phase = 0
+
+    elif heartbeat_phase == 4 and now >= phase_time:
+
+        drv.realtime_value = 0
+
+        next_beat += interval
+
+        if next_beat < now:
+            next_beat = now + interval
+
+        heartbeat_phase = 0
