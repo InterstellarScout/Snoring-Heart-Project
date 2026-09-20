@@ -148,6 +148,7 @@ class VNextLogicTests(unittest.TestCase):
             {
                 "clamp", "maximum_delay_ms", "changed", "truthy", "set_master_power",
                 "set_heart_bpm", "set_snore_gap", "set_breath_rate",
+                "note_user_activity", "queue_mode_defaults_autosave",
                 "set_mode", "set_running", "next_button_mode",
                 "adjust_active_mode_speed", "effective_button_event",
                 "handle_button_event", "apply_controls",
@@ -170,6 +171,10 @@ class VNextLogicTests(unittest.TestCase):
                 "LUB_DURATION": 0.070,
                 "DUB_DURATION": 0.090,
                 "MIN_BEAT_REST": 0.010,
+                "AUTO_SLEEP_SECONDS": 3600,
+                "AUTO_SAVE_AFTER_MODE_CHANGE_SECONDS": 300,
+                "auto_sleep_deadline": None,
+                "preferences_autosave_deadline": None,
             },
         )
         handle = values["handle_button_event"]

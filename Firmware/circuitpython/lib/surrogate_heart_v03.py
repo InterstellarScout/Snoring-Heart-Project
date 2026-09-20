@@ -39,6 +39,15 @@ CAPTIVE_DEBUG = False
 HAPTIC_SAFETY_MARGIN_SECONDS = 0.350
 HAPTIC_CONTINUOUS_LEASE_SECONDS = 0.150
 APPLICATION_WATCHDOG_TIMEOUT_SECONDS = 5.0
+AUTO_SAVE_AFTER_MODE_CHANGE_SECONDS = 5 * 60
+AUTO_SLEEP_DEFAULT_SECONDS = 60 * 60
+try:
+    AUTO_SLEEP_SECONDS = max(
+        0,
+        int(os.getenv("HEART_AUTO_SLEEP_SECONDS") or AUTO_SLEEP_DEFAULT_SECONDS),
+    )
+except (TypeError, ValueError):
+    AUTO_SLEEP_SECONDS = AUTO_SLEEP_DEFAULT_SECONDS
 UPSTREAM_CONNECT_TIMEOUT_SECONDS = 4
 ACTIVE_MODES = ("heart", "purring", "snoring", "breathing")
 BUTTON_MODE_SEQUENCE = ("heart", "purring", "snoring", "breathing")
@@ -1466,12 +1475,13 @@ settings_upstream_enabled = truthy(
 
 # live_state is the authoritative user-session configuration. Scheduler phase,
 # deadlines, event snapshots, and direction counters stay inside the scheduler
-# objects and are never persisted. saved_defaults changes only via Save Defaults.
+# objects and are never persisted. saved_defaults changes via the explicit
+# Save Defaults control and after a stable five-minute mode selection.
 live_state = {
     "active_mode": saved_value(saved_defaults, "m", "effect_mode", "heart"),
     "running": False,
     "master_power": clamp(int(saved_value(saved_defaults, "p", "master_power", 100)), 0, 100),
-    "heart_bpm": clamp(int(saved_value(saved_defaults, "b", "bpm", 72)), 30, 240),
+    "heart_bpm": clamp(int(saved_value(saved_defaults, "b", "bpm", 60)), 30, 240),
     "heart_motor_mode": saved_value(saved_defaults, "hm", "motor_mode", "tandem"),
     "heart_lub": clamp(int(saved_value(saved_defaults, "li", "lub_intensity", 65)), 0, 100),
     "heart_dub": clamp(int(saved_value(saved_defaults, "di", "dub_intensity", 80)), 0, 100),
@@ -1611,6 +1621,10 @@ nat_api_names = [
 ]
 internet_passthrough_available = False
 defaults_status = {"message": "", "saved": False}
+preferences_autosave_deadline = None
+auto_sleep_deadline = (
+    boot_started + AUTO_SLEEP_SECONDS if AUTO_SLEEP_SECONDS > 0 else None
+)
 runtime_metrics = {
     "loop_count": 0,
     "last_loop_gap_ms": 0.0,
@@ -1645,7 +1659,7 @@ HTML = """<!DOCTYPE html>
 <section class="card"><h2>HARDWARE</h2><div class="status"><div>Motor 1 <span id="motor1Status"></span></div><div>Motor 2 <span id="motor2Status"></span></div><div id="busStatus"></div></div></section>
 <section class="card"><h2>BATTERY</h2><div class="status">Battery monitoring is not installed.</div></section>
 <section id="connectionLauncher" class="card"><button id="connectionToggle" class="settingsButton">Connection Settings</button></section>
-<section id="connectionPanel" class="card hidden"><h2>CONNECTION SETTINGS</h2><div class="status"><strong>Direct Control Network</strong><div id="networkName"></div><div id="directAddress"></div><p>The direct AP always remains available.</p></div><div class="row label"><label for="upstreamEnabled">Connect Heart to Wi-Fi</label><input id="upstreamEnabled" type="checkbox"></div><div id="upstreamFields"><div class="label">Network</div><input id="upstreamSsid" type="text" autocomplete="off" placeholder="Wi-Fi network name"><div class="label">Password</div><input id="upstreamPassword" type="password" autocomplete="new-password" placeholder="Leave blank to keep saved password"><button id="connectUpstream" class="primary settingsButton">Connect</button><button id="testInternet" class="settingsButton">Test Heart Internet</button><p class="hint">Turn Running OFF before Connect or Test. Manual SSID entry avoids a blocking scan that could stall haptic scheduling.</p></div><div id="upstreamStatus" class="status"></div><div id="passthroughStatus" class="status"></div><h2 style="margin-top:20px">SAVED DEFAULTS</h2><p class="hint">Live adjustments last for this powered session. They are written to persistent storage only when you press this button.</p><button id="saveDefaults" class="settingsButton">Save Current Settings as Defaults</button><p id="defaultsMessage" class="notice"></p><button id="connectionBack" class="settingsButton">Back to Controls</button></section>
+<section id="connectionPanel" class="card hidden"><h2>CONNECTION SETTINGS</h2><div class="status"><strong>Direct Control Network</strong><div id="networkName"></div><div id="directAddress"></div><p>The direct AP always remains available.</p></div><div class="row label"><label for="upstreamEnabled">Connect Heart to Wi-Fi</label><input id="upstreamEnabled" type="checkbox"></div><div id="upstreamFields"><div class="label">Network</div><input id="upstreamSsid" type="text" autocomplete="off" placeholder="Wi-Fi network name"><div class="label">Password</div><input id="upstreamPassword" type="password" autocomplete="new-password" placeholder="Leave blank to keep saved password"><button id="connectUpstream" class="primary settingsButton">Connect</button><button id="testInternet" class="settingsButton">Test Heart Internet</button><p class="hint">Turn Running OFF before Connect or Test. Manual SSID entry avoids a blocking scan that could stall haptic scheduling.</p></div><div id="upstreamStatus" class="status"></div><div id="passthroughStatus" class="status"></div><h2 style="margin-top:20px">SAVED DEFAULTS</h2><p class="hint">Save the current mode and controls for the next power-on, including after battery loss. A changed mode also saves automatically after five minutes.</p><button id="saveDefaults" class="settingsButton">Save Current Settings for Next Power-On</button><p id="defaultsMessage" class="notice"></p><button id="connectionBack" class="settingsButton">Back to Controls</button></section>
 </main><script>
 const $=id=>document.getElementById(id);let current=null;let sending=false;const modeHelp={tandem:"Motor 1 = LUB / Motor 2 = DUB",simultaneous:"Both motors produce both contractions",motor1:"Heartbeat uses Motor 1 only",motor2:"Heartbeat uses Motor 2 only"};const snoreHelp={motor1:"Snoring uses Motor 1 only.",motor2:"Snoring uses Motor 2 only.",both:"Both motors reproduce the same snore together.",alternating:"The follow motor reaches full output before the lead motor fades. Direction reverses after each complete snore."};
 async function post(path,values={}){sending=true;try{await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(values)})}finally{sending=false}await refresh()}
@@ -1695,6 +1709,25 @@ def compact_preferences():
         "ns": state["upstream_ssid"],
         "nb": state["network_behavior"],
     }
+
+
+def save_current_defaults(message):
+    saved = preferences.save_defaults(compact_preferences(), compact_credentials())
+    defaults_status["saved"] = saved
+    defaults_status["message"] = message if saved else "Defaults could not be saved"
+    return saved
+
+
+def note_user_activity(now):
+    global auto_sleep_deadline
+    if AUTO_SLEEP_SECONDS > 0:
+        auto_sleep_deadline = now + AUTO_SLEEP_SECONDS
+
+
+def queue_mode_defaults_autosave(now):
+    global preferences_autosave_deadline
+    preferences_autosave_deadline = now + AUTO_SAVE_AFTER_MODE_CHANGE_SECONDS
+    note_user_activity(now)
 
 
 def compact_credentials():
@@ -1834,11 +1867,13 @@ def set_mode(mode, now):
     if not arbiter.switch_mode(mode, now):
         return False
     run_timer.cancel()
+    queue_mode_defaults_autosave(now)
     return True
 
 
 def set_running(running, now):
     arbiter.set_running(bool(running), now)
+    note_user_activity(now)
 
 
 def next_button_mode(now):
@@ -2113,9 +2148,7 @@ def api_controls(request: Request):
 
 @server.route("/api/v1/defaults", POST)
 def api_save_defaults(request: Request):
-    saved = preferences.save_defaults(compact_preferences(), compact_credentials())
-    defaults_status["saved"] = saved
-    defaults_status["message"] = "Defaults saved" if saved else "Defaults could not be saved"
+    saved = save_current_defaults("Defaults saved for next power-on")
     print("[PREFS] Save Defaults requested; motor output unchanged")
     return json_response(request, public_state(time.monotonic()))
 
@@ -2369,6 +2402,17 @@ try:
         now = time.monotonic()
         if haptics.check_failsafe(now):
             arbiter.stop_all(now)
+        if (
+            preferences_autosave_deadline is not None
+            and now >= preferences_autosave_deadline
+        ):
+            save_current_defaults("Mode saved automatically after five minutes")
+            preferences_autosave_deadline = None
+            print("[PREFS] Mode-change defaults saved automatically")
+        if auto_sleep_deadline is not None and now >= auto_sleep_deadline:
+            arbiter.set_running(False, now)
+            auto_sleep_deadline = None
+            print("[SLEEP] Haptic output auto-slept after configured idle period")
         run_timer.update(now, arbiter)
         if now >= network_refresh_at:
             network_manager.refresh()

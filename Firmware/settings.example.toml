@@ -3,6 +3,10 @@ HEART_AP_SSID="Surrogate Heart"
 # Uncomment and use 8-63 characters to enable WPA security.
 # HEART_AP_PASSWORD="replace-with-a-private-password"
 
+# Haptic output automatically sleeps after one hour of no user changes.
+# Set to 0 to disable, or provide another duration in seconds.
+# HEART_AUTO_SLEEP_SECONDS=3600
+
 # Optional upstream/home Wi-Fi bootstrap values. These do not replace or
 # disable the Surrogate Heart AP. Settings entered in the controller remain
 # session-only until Save Defaults is pressed.

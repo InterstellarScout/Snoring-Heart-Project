@@ -14,7 +14,8 @@ PSRAM) controlling two independent DRV2605L haptic drivers.
 - Directional purring with a continuous baseline and 240-1200 pulses/minute (4-20 Hz) rate
 - Event-derived haptic output leases plus a hardware main-loop watchdog
 - Staged dual-motor cross-chest snoring
-- Session-only live configuration plus explicit **Save Defaults** persistence
+- 60 BPM default heartbeat plus explicit and delayed persistent defaults
+- One-hour configurable haptic auto-sleep
 - Saved preferred mode automatically starts after successful initialization
   unless an SCD43 is detected, in which case Running starts OFF
 - Optional upstream Wi-Fi while the direct AP remains enabled
@@ -56,15 +57,19 @@ The AP is open when `HEART_AP_PASSWORD` is omitted. Use an 8-63 character passwo
 ## Configuration model
 
 The QT Py owns `live_state` for the entire powered session. Browser refreshes,
-reconnections, state polling, and mode changes do not rebuild that state. UI
-changes are not written automatically. **Save Current Settings as Defaults**
-copies supported live values into `saved_defaults` in NVM; upstream credentials
-are stored in a separate NVM region and are never returned by the REST API.
+reconnections, and state polling do not rebuild that state. A new device starts
+in Heart mode at 60 BPM unless a saved default exists. **Save Current Settings
+for Next Power-On** copies supported live values into `saved_defaults` in NVM,
+including across a dead battery. After a mode change remains selected for five
+minutes, the same settings are saved automatically. Upstream credentials are
+stored in a separate NVM region and are never returned by the REST API.
 CircuitPython NVM is device-local but not encrypted, so physical access to the
 board must be treated as access to the saved Wi-Fi credential.
 
-On the next power cycle, the firmware rebuilds live state from those explicit
-defaults. Physical-button actions never save defaults automatically.
+On the next power cycle, the firmware rebuilds live state from those defaults.
+The haptic output auto-sleeps after one hour from boot or the most recent mode/
+Run control change; set `HEART_AUTO_SLEEP_SECONDS` in `settings.toml` to alter
+that duration, or set it to `0` to disable it.
 
 ## M5 dual-button controls
 
